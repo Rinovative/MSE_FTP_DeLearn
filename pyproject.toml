@@ -1,0 +1,99 @@
+[project]
+name = "mse-ftp-delearn"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "ipykernel>=7.2.0",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.8",
+    "numpy>=2.4.4",
+    "opencv-python>=4.13.0.92",
+    "optuna>=4.8.0",
+    "pandas>=3.0.1",
+    "pillow>=12.1.1",
+    "scikit-learn>=1.8.0",
+    "torch>=2.11.0",
+    "torchaudio>=2.11.0",
+    "torchvision>=0.26.0",
+    "tqdm>=4.67.3",
+    "wandb>=0.25.1",
+]
+
+[dependency-groups]
+dev = [
+    "nbqa>=1.9.1",
+    "ruff>=0.15.8",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128" }]
+torchvision = [{ index = "pytorch-cu128" }]
+torchaudio = [{ index = "pytorch-cu128" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+# ============================================================
+# 🧹 Ruff Configuration
+# ============================================================
+
+[tool.ruff]
+line-length = 150
+target-version = "py311"
+extend-exclude = [
+  "venv", ".venv", "data", "build", "dist"
+]
+
+# ------------------------------------------------------------
+# ✨ Ruff Formatter (PEP 8 / PEP 257 aligned)
+# ------------------------------------------------------------
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+# ------------------------------------------------------------
+# 🧹 Ruff Linter
+# ------------------------------------------------------------
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  # 🔧 Formatting conflicts
+  "COM812",  # Trailing comma handled by formatter
+
+  # 🧾 Docstring style (PEP 257 consistency)
+  "D203",  # No blank line before class (conflicts with D211)
+  "D212",  # Summary line position (conflicts with D213)
+
+  # 📦 Import conventions
+  "INP001",  # Implicit namespace package (src-layout)
+
+  # intentional ignores
+  "ANN401",  # Typing Any
+  "FBT001", "FBT002", "FBT003",  # Boolean positional arguments
+  "PLR0913",  # Too many function arguments
+  "N806", "N803",  # Variable naming conventions (scientific code)
+  "EXE002",  # Missing executable permissions
+  "T201",    # Print statements
+  "ERA001",  # commented-out code disallowed
+]
+fixable = ["ALL"]
+
+# ------------------------------------------------------------
+# 🧠 Code complexity (McCabe)
+# ------------------------------------------------------------
+[tool.ruff.lint.mccabe]
+max-complexity = 20
+
+# ------------------------------------------------------------
+# 🧱 Structural limits (Pylint-style)
+# ------------------------------------------------------------
+[tool.ruff.lint.pylint]
+max-branches = 20
+max-statements = 100
+max-returns = 10
