@@ -91,12 +91,13 @@ Füge die Daten entsprechend ein:
 
 ```text
 data/
-├── icosimal_img_class_03/
+├── 01_icosimal/
 │   └── data_uniform_224_224_sets/
 │       ├── train/
 │       └── validate/
 ├── 02_project/
-└── 03_project/
+├── 03_project/
+└── ...
 ```
 
 ---
@@ -119,8 +120,6 @@ python projects/01_cnn_icosimal/src/train.py
 ## 9. Neue Pakete hinzufügen
 
 Neue Abhängigkeiten werden über **uv** hinzugefügt.
-
-### Normale Pakete
 
 ```powershell
 uv add <package>
@@ -148,7 +147,28 @@ uv pip install torch torchvision torchaudio --index-url https://download.pytorch
 * CUDA-Versionen liegen nicht im Standard-PyPI
 * deshalb ist dieser Sonderfall notwendig
 
-Die Konfiguration ist zusätzlich manuell in der `pyproject.toml` hinterlegt → reproduzierbar
+Die Konfiguration ist zusätzlich in der `pyproject.toml` hinterlegt → reproduzierbar
+
+---
+
+## 10. Ruff (Linting & Formatting)
+
+Ruff läuft automatisch in VS Code (Format on Save).
+
+Falls Regeln zu strikt sind, können sie in der `pyproject.toml` angepasst werden:
+
+```toml
+[tool.ruff.lint]
+ignore = ["RULE_CODE"]
+```
+
+Beispiel:
+
+```toml
+ignore = ["T201"]  # erlaubt print()
+```
+
+👉 Neue Regeln einfach dort hinzufügen oder entfernen.
 
 ---
 
