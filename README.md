@@ -82,19 +82,7 @@ True
 
 ---
 
-## 7. Weights & Biases (optional)
-
-Ein Login ist nur nötig, wenn W&B für Online-Tracking verwendet wird.
-
-```powershell
-wandb login
-```
-
-Alternativ direkt im Notebook / Code.
-
----
-
-## 8. Datensatz einfügen
+## 7. Datensatz einfügen
 
 Die Daten sind **nicht im Repository enthalten**.
 
@@ -113,7 +101,7 @@ data/
 
 ---
 
-## 9. Projekt verwenden
+## 8. Projekt verwenden
 
 Nach dem Setup kann alles direkt in VS Code ausgeführt werden:
 
@@ -128,7 +116,7 @@ python projects/01_cnn_icosimal/src/train.py
 
 ---
 
-## 10. Neue Pakete hinzufügen
+## 9. Neue Pakete hinzufügen
 
 Neue Abhängigkeiten werden über **uv** hinzugefügt.
 
