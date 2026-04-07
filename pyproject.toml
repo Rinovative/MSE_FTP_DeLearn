@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "mse-ftp-delearn"
 version = "0.1.0"
-description = "Add your description here"
+description = "Deep learning projects and utilities"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -27,6 +31,12 @@ dev = [
     "ruff>=0.15.8",
 ]
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128" }]
 torchvision = [{ index = "pytorch-cu128" }]
@@ -38,61 +48,65 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 # ============================================================
-# 🧹 Ruff Configuration
+# Ruff Configuration
 # ============================================================
 
 [tool.ruff]
 line-length = 150
 target-version = "py311"
 extend-exclude = [
-  "venv", ".venv", "data", "build", "dist"
+  "venv",
+  ".venv",
+  "data",
+  "build",
+  "dist",
 ]
 
-# ------------------------------------------------------------
-# ✨ Ruff Formatter (PEP 8 / PEP 257 aligned)
-# ------------------------------------------------------------
+# ============================================================
+# Ruff Formatter
+# ============================================================
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 
-# ------------------------------------------------------------
-# 🧹 Ruff Linter
-# ------------------------------------------------------------
+# ============================================================
+# Ruff Linter
+# ============================================================
+
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
-  # 🔧 Formatting conflicts
-  "COM812",  # Trailing comma handled by formatter
-
-  # 🧾 Docstring style (PEP 257 consistency)
-  "D203",  # No blank line before class (conflicts with D211)
-  "D212",  # Summary line position (conflicts with D213)
-
-  # 📦 Import conventions
-  "INP001",  # Implicit namespace package (src-layout)
-
-  # intentional ignores
-  "ANN401",  # Typing Any
-  "FBT001", "FBT002", "FBT003",  # Boolean positional arguments
-  "PLR0913",  # Too many function arguments
-  "N806", "N803",  # Variable naming conventions (scientific code)
-  "EXE002",  # Missing executable permissions
-  "T201",    # Print statements
-  "ERA001",  # commented-out code disallowed
+  "COM812",  # trailing comma handled by formatter
+  "D203",    # conflicts with D211
+  "D212",    # conflicts with D213
+  "INP001",  # implicit namespace package
+  "ANN401",  # allow Any
+  "FBT001",
+  "FBT002",
+  "FBT003",
+  "PLR0913", # too many function arguments
+  "N806",
+  "N803",    # scientific naming
+  "EXE002",
+  "T201",    # allow print
+  "ERA001",  # allow commented code temporarily
 ]
 fixable = ["ALL"]
 
-# ------------------------------------------------------------
-# 🧠 Code complexity (McCabe)
-# ------------------------------------------------------------
+# ============================================================
+# Complexity
+# ============================================================
+
 [tool.ruff.lint.mccabe]
 max-complexity = 20
 
-# ------------------------------------------------------------
-# 🧱 Structural limits (Pylint-style)
-# ------------------------------------------------------------
+# ============================================================
+# Pylint-style limits
+# ============================================================
+
 [tool.ruff.lint.pylint]
 max-branches = 20
 max-statements = 100
