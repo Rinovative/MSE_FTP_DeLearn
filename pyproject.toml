@@ -17,6 +17,7 @@ dependencies = [
     "optuna>=4.8.0",
     "pandas>=3.0.1",
     "pillow>=12.1.1",
+    "python-dotenv>=1.2.2",
     "scikit-learn>=1.8.0",
     "torch>=2.11.0",
     "torchaudio>=2.11.0",
