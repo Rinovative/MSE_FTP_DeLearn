@@ -12,7 +12,8 @@ from typing import Any
 
 import torch
 
-EpochEndCallback = Callable[[dict[str, float | int | None]], None]
+EpochInfo = dict[str, float | int | None]
+EpochEndCallback = Callable[[EpochInfo], None]
 
 
 def _to_device(device: torch.device | str) -> torch.device:
@@ -303,14 +304,6 @@ def train_model(
             device=device,
         )
 
-        current_lr = _get_current_lr(optimizer)
-
-        history["train_loss"].append(train_metrics["loss"])
-        history["train_accuracy"].append(train_metrics["accuracy"])
-        history["val_loss"].append(val_metrics["loss"])
-        history["val_accuracy"].append(val_metrics["accuracy"])
-        history["lr"].append(float(current_lr) if current_lr is not None else float("nan"))
-
         if _should_update_best(
             current_val_accuracy=val_metrics["accuracy"],
             current_val_loss=val_metrics["loss"],
@@ -322,7 +315,20 @@ def train_model(
             best_epoch = epoch + 1
             best_state_dict = _clone_state_dict_to_cpu(model)
 
-        epoch_info: dict[str, float | int | None] = {
+        _step_scheduler(
+            scheduler,
+            val_loss=val_metrics["loss"],
+        )
+
+        current_lr = _get_current_lr(optimizer)
+
+        history["train_loss"].append(train_metrics["loss"])
+        history["train_accuracy"].append(train_metrics["accuracy"])
+        history["val_loss"].append(val_metrics["loss"])
+        history["val_accuracy"].append(val_metrics["accuracy"])
+        history["lr"].append(float(current_lr) if current_lr is not None else float("nan"))
+
+        epoch_info: EpochInfo = {
             "epoch": epoch + 1,
             "train_loss": train_metrics["loss"],
             "train_accuracy": train_metrics["accuracy"],
@@ -337,17 +343,13 @@ def train_model(
         if epoch_end_callback is not None:
             epoch_end_callback(epoch_info)
 
-        _step_scheduler(
-            scheduler,
-            val_loss=val_metrics["loss"],
-        )
-
         print(
             f"Epoch {epoch + 1:03d}/{num_epochs:03d} | "
             f"train_loss={train_metrics['loss']:.4f} | "
             f"train_acc={train_metrics['accuracy']:.4f} | "
             f"val_loss={val_metrics['loss']:.4f} | "
-            f"val_acc={val_metrics['accuracy']:.4f}"
+            f"val_acc={val_metrics['accuracy']:.4f} | "
+            f"lr={(current_lr if current_lr is not None else float('nan')):.6f}"
         )
 
     model.load_state_dict(best_state_dict)

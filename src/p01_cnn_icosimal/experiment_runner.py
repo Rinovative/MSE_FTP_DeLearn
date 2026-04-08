@@ -138,14 +138,77 @@ def _extract_public_state(obj: Any, exclude: set[str] | None = None) -> dict[str
     return extracted
 
 
+def _split_data_config(data_config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Split raw data config into meaningful nested groups."""
+    grouped: dict[str, dict[str, Any]] = {
+        "dataset": {},
+        "dataloader": {},
+        "transforms": {},
+        "normalization": {},
+        "other": {},
+    }
+
+    dataset_keys = {
+        "data_root",
+        "dataset_name",
+        "image_size",
+        "num_classes",
+        "class_names",
+        "num_train_samples",
+        "num_val_samples",
+        "train_dir",
+        "val_dir",
+    }
+
+    dataloader_keys = {
+        "batch_size",
+        "num_workers",
+        "pin_memory",
+        "persistent_workers",
+        "drop_last",
+        "shuffle",
+    }
+
+    transform_keys = {
+        "use_flip",
+        "randaugment_num_ops",
+        "randaugment_magnitude",
+        "resize_mode",
+        "interpolation",
+    }
+
+    normalization_keys = {
+        "mean",
+        "std",
+    }
+
+    for key, value in data_config.items():
+        if key in dataset_keys:
+            grouped["dataset"][key] = value
+        elif key in dataloader_keys:
+            grouped["dataloader"][key] = value
+        elif key in transform_keys:
+            grouped["transforms"][key] = value
+        elif key in normalization_keys:
+            grouped["normalization"][key] = value
+        else:
+            grouped["other"][key] = value
+
+    return {group_name: group_values for group_name, group_values in grouped.items() if group_values}
+
+
 def _extract_model_config(model: torch.nn.Module) -> dict[str, Any]:
     """Extract model metadata for the run config."""
-    config: dict[str, Any] = {
+    architecture: dict[str, Any] = {
         "model_name": model.__class__.__name__,
+    }
+
+    parameters: dict[str, Any] = {
         "num_parameters_total": sum(p.numel() for p in model.parameters()),
         "num_parameters_trainable": sum(p.numel() for p in model.parameters() if p.requires_grad),
     }
 
+    public_state: dict[str, Any] = {}
     if hasattr(model, "get_model_config") and callable(model.get_model_config):
         model_config = model.get_model_config()
 
@@ -155,18 +218,22 @@ def _extract_model_config(model: torch.nn.Module) -> dict[str, Any]:
 
         for key, value in model_config.items():
             if _is_config_value(value):
-                config[key] = _normalize_for_config(value)
+                public_state[key] = _normalize_for_config(value)
     else:
-        config.update(_extract_public_state(model, exclude={"training"}))
+        public_state = _extract_public_state(model, exclude={"training"})
 
-    return config
+    return {
+        "architecture": architecture,
+        "parameters": parameters,
+        "details": public_state,
+    }
 
 
 def _extract_optimizer_config(optimizer: torch.optim.Optimizer) -> dict[str, Any]:
     """Extract optimizer metadata for the run config."""
     config: dict[str, Any] = {
-        "optimizer_name": optimizer.__class__.__name__,
-        "optimizer_num_param_groups": len(optimizer.param_groups),
+        "name": optimizer.__class__.__name__,
+        "num_param_groups": len(optimizer.param_groups),
     }
 
     if len(optimizer.param_groups) == 0:
@@ -187,7 +254,7 @@ def _extract_optimizer_config(optimizer: torch.optim.Optimizer) -> dict[str, Any
 def _extract_criterion_config(criterion: torch.nn.Module) -> dict[str, Any]:
     """Extract criterion metadata for the run config."""
     config: dict[str, Any] = {
-        "criterion_name": criterion.__class__.__name__,
+        "name": criterion.__class__.__name__,
     }
     config.update(_extract_public_state(criterion))
     return config
@@ -197,11 +264,11 @@ def _extract_scheduler_config(scheduler: Any) -> dict[str, Any]:
     """Extract scheduler metadata for the run config."""
     if scheduler is None:
         return {
-            "scheduler_name": None,
+            "name": None,
         }
 
     config: dict[str, Any] = {
-        "scheduler_name": scheduler.__class__.__name__,
+        "name": scheduler.__class__.__name__,
     }
     config.update(_extract_public_state(scheduler))
     return config
@@ -209,48 +276,32 @@ def _extract_scheduler_config(scheduler: Any) -> dict[str, Any]:
 
 def _extract_data_config(data_bundle: Any) -> dict[str, Any]:
     """Extract data-related metadata from the data bundle."""
-    data_config = _bundle_get(data_bundle, "data_config")
+    raw_data_config = _bundle_get(data_bundle, "data_config")
 
-    if not isinstance(data_config, dict):
+    if not isinstance(raw_data_config, dict):
         msg = "data_bundle.data_config must be a dict."
         raise TypeError(msg)
 
-    config: dict[str, Any] = {}
-
-    for key, value in data_config.items():
+    normalized_data_config: dict[str, Any] = {}
+    for key, value in raw_data_config.items():
         if _is_config_value(value):
-            config[key] = _normalize_for_config(value)
+            normalized_data_config[key] = _normalize_for_config(value)
 
     class_names = _bundle_get(data_bundle, "class_names")
     train_loader = _bundle_get(data_bundle, "train_loader")
     val_loader = _bundle_get(data_bundle, "val_loader")
 
     if class_names is not None:
-        config["num_classes"] = len(class_names)
-        config["class_names"] = list(class_names)
+        normalized_data_config["num_classes"] = len(class_names)
+        normalized_data_config["class_names"] = list(class_names)
 
     if hasattr(train_loader, "dataset"):
-        config["num_train_samples"] = len(train_loader.dataset)
+        normalized_data_config["num_train_samples"] = len(train_loader.dataset)
 
     if hasattr(val_loader, "dataset"):
-        config["num_val_samples"] = len(val_loader.dataset)
+        normalized_data_config["num_val_samples"] = len(val_loader.dataset)
 
-    return config
-
-
-def _flatten_dict(data: dict[str, Any], parent_key: str = "", sep: str = "/") -> dict[str, Any]:
-    """Flatten a nested dictionary using slash-separated keys."""
-    items: dict[str, Any] = {}
-
-    for key, value in data.items():
-        new_key = f"{parent_key}{sep}{key}" if parent_key else key
-
-        if isinstance(value, dict):
-            items.update(_flatten_dict(value, parent_key=new_key, sep=sep))
-        else:
-            items[new_key] = value
-
-    return items
+    return _split_data_config(normalized_data_config)
 
 
 def _validate_data_bundle(data_bundle: Any) -> None:
@@ -383,21 +434,22 @@ def _make_epoch_end_callback(
     def epoch_end_callback(epoch_info: EpochInfo) -> None:
         _update_last_epoch_info(last_epoch_info, epoch_info)
 
+        epoch_value = epoch_info["epoch"]
+        if epoch_value is None:
+            msg = "epoch value cannot be None."
+            raise ValueError(msg)
+
         log_payload = {
-            "epoch": epoch_info["epoch"],
-            "train/loss": epoch_info["train_loss"],
-            "train/accuracy": epoch_info["train_accuracy"],
-            "val/loss": epoch_info["val_loss"],
-            "val/accuracy": epoch_info["val_accuracy"],
-            "best/val_accuracy": epoch_info["best_val_accuracy"],
-            "best/val_loss": epoch_info["best_val_loss"],
-            "best/epoch": epoch_info["best_epoch"],
+            "train_loss": epoch_info["train_loss"],
+            "train_accuracy": epoch_info["train_accuracy"],
+            "val_loss": epoch_info["val_loss"],
+            "val_accuracy": epoch_info["val_accuracy"],
         }
 
         if epoch_info["lr"] is not None:
             log_payload["lr"] = epoch_info["lr"]
 
-        wandb_run.log(log_payload)
+        wandb_run.log(log_payload, step=int(epoch_value), commit=True)
 
         if trial is None:
             return
@@ -405,11 +457,6 @@ def _make_epoch_end_callback(
         if prune_metric not in epoch_info:
             msg = f"prune_metric '{prune_metric}' not found in epoch_info."
             raise KeyError(msg)
-
-        epoch_value = epoch_info["epoch"]
-        if epoch_value is None:
-            msg = "epoch value cannot be None when reporting to trial."
-            raise ValueError(msg)
 
         metric_value = epoch_info[prune_metric]
         if metric_value is None:
@@ -439,6 +486,7 @@ def build_run_config(
     extra_config: dict[str, Any] | None = None,
     seed: int | None = None,
     deterministic: bool = True,
+    device: torch.device | str | None = None,
 ) -> dict[str, Any]:
     """
     Build the full run configuration from the provided objects.
@@ -464,6 +512,8 @@ def build_run_config(
         Optional random seed used for reproducibility.
     deterministic
         Whether deterministic torch execution is requested.
+    device
+        Optional training device.
 
     Returns
     -------
@@ -471,16 +521,24 @@ def build_run_config(
         Nested run configuration dictionary.
 
     """
+    normalized_device = str(_to_device(device)) if device is not None else None
+
     config: dict[str, Any] = {
         "data": _extract_data_config(data_bundle),
         "model": _extract_model_config(model),
-        "optimizer": _extract_optimizer_config(optimizer),
-        "criterion": _extract_criterion_config(criterion),
-        "scheduler": _extract_scheduler_config(scheduler),
+        "optimization": {
+            "optimizer": _extract_optimizer_config(optimizer),
+            "scheduler": _extract_scheduler_config(scheduler),
+            "criterion": _extract_criterion_config(criterion),
+        },
         "training": {
             "num_epochs": num_epochs,
             "seed": seed,
             "deterministic": deterministic,
+        },
+        "runtime": {
+            "device": normalized_device,
+            "cuda_available": torch.cuda.is_available(),
         },
     }
 
@@ -626,9 +684,8 @@ def run_experiment(
         extra_config=extra_config,
         seed=seed,
         deterministic=deterministic,
+        device=device,
     )
-
-    flat_run_config = _flatten_dict(run_config)
 
     wandb_run = wandb.init(
         project=final_project_name,
@@ -638,7 +695,7 @@ def run_experiment(
         notes=notes,
         group=group,
         job_type=job_type,
-        config=flat_run_config,
+        config=run_config,
     )
 
     last_epoch_info: dict[str, float | int | None] = {}
