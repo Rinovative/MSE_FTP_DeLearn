@@ -3,8 +3,9 @@ Experiment runner with Weights & Biases integration.
 
 This module builds a reproducible run configuration from the provided objects,
 creates a W&B run, executes the training loop, stores local experiment
-artifacts in a clean per-run directory structure, and provides a helper
-function to export the saved best model into a versionable artifacts folder.
+artifacts in a clean per-run directory structure, and provides helper
+functions to reuse already finished runs and to export the saved best model
+into a versionable artifacts folder.
 
 The code is designed to work when experiments are launched from notebooks.
 """
@@ -409,6 +410,82 @@ def _load_json(path: Path) -> dict[str, Any]:
         return json.load(file)
 
 
+def _is_complete_run_dir(run_dir: Path) -> bool:
+    """Return whether a run directory contains all files needed for reloading."""
+    required_files = [
+        run_dir / "config.json",
+        run_dir / "summary.json",
+        run_dir / "history.json",
+        run_dir / "best_model.pt",
+    ]
+    return all(path.exists() for path in required_files)
+
+
+def _configs_match(config_a: dict[str, Any], config_b: dict[str, Any]) -> bool:
+    """Compare two configs by normalized JSON content."""
+    return json.dumps(config_a, sort_keys=True, ensure_ascii=False) == json.dumps(
+        config_b,
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+
+
+def _find_matching_completed_run(
+    *,
+    base_output_dir: str | Path,
+    run_name: str,
+    run_config: dict[str, Any],
+) -> Path | None:
+    """Find an existing completed run with identical config."""
+    base_output_dir = Path(base_output_dir)
+
+    if not base_output_dir.exists():
+        return None
+
+    safe_run_name = _sanitize_name_for_path(run_name)
+    prefix = f"{safe_run_name}__"
+
+    candidates = sorted(
+        [path for path in base_output_dir.iterdir() if path.is_dir() and path.name.startswith(prefix)],
+        key=lambda path: path.name,
+        reverse=True,
+    )
+
+    for candidate in candidates:
+        if not _is_complete_run_dir(candidate):
+            continue
+
+        try:
+            saved_config = _load_json(candidate / "config.json")
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        if _configs_match(saved_config, run_config):
+            return candidate
+
+    return None
+
+
+def _load_saved_run_result(output_dir: str | Path) -> dict[str, Any]:
+    """Load a saved finished run into the same lightweight result structure."""
+    output_dir = Path(output_dir)
+
+    summary = _load_json(output_dir / "summary.json")
+    history = _load_json(output_dir / "history.json")
+    run_config = _load_json(output_dir / "config.json")
+
+    return {
+        "history": history,
+        "best_epoch": summary["best_epoch"],
+        "best_val_accuracy": summary["best_val_accuracy"],
+        "best_val_loss": summary["best_val_loss"],
+        "run_config": run_config,
+        "run_name": output_dir.name.rsplit("__", maxsplit=1)[0],
+        "output_dir": str(output_dir),
+        "loaded_existing": True,
+    }
+
+
 def _save_experiment_artifacts(
     *,
     output_dir: Path,
@@ -624,6 +701,164 @@ def build_run_config(
     return config
 
 
+def run_or_load_experiment(
+    *,
+    data_bundle: Any,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    criterion: torch.nn.Module,
+    device: torch.device | str,
+    num_epochs: int,
+    scheduler: Any = None,
+    trial: Any = None,
+    project_name: str | None = None,
+    entity: str | None = None,
+    run_name: str | None = None,
+    run_name_suffix: str | None = None,
+    tags: list[str] | None = None,
+    notes: str | None = None,
+    group: str | None = None,
+    job_type: str | None = None,
+    extra_config: dict[str, Any] | None = None,
+    prune_metric: str = "val_accuracy",
+    seed: int | None = None,
+    deterministic: bool = True,
+    save_outputs: bool = True,
+    base_output_dir: str | Path | None = None,
+    force_rerun: bool = False,
+) -> dict[str, Any]:
+    """
+    Run or load a completed experiment with identical configuration.
+
+    If a completed run with the same configuration already exists locally,
+    load and return its results instead of rerunning. Otherwise, run a new
+    experiment with W&B logging and optional Optuna integration.
+
+    Parameters
+    ----------
+    data_bundle
+        Bundle containing ``train_loader``, ``val_loader``, ``class_names``,
+        and ``data_config``.
+    model
+        Model to train.
+    optimizer
+        Optimizer used for training.
+    criterion
+        Loss function.
+    device
+        Target device such as ``"cuda"`` or ``"cpu"``.
+    num_epochs
+        Number of epochs for training.
+    scheduler
+        Optional learning-rate scheduler.
+    trial
+        Optional Optuna trial for hyperparameter optimization.
+    project_name
+        Optional W&B project name.
+    entity
+        Optional W&B entity.
+    run_name
+        Optional explicit W&B run name.
+    run_name_suffix
+        Optional suffix appended to the run name.
+    tags
+        Optional W&B tags.
+    notes
+        Optional W&B notes.
+    group
+        Optional W&B group.
+    job_type
+        Optional W&B job type.
+    extra_config
+        Optional extra metadata for run configuration.
+    prune_metric
+        Metric name for Optuna pruning.
+    seed
+        Optional random seed for reproducibility.
+    deterministic
+        Whether deterministic torch execution is requested.
+    save_outputs
+        Whether to store output artifacts locally.
+    base_output_dir
+        Base directory for local outputs.
+    force_rerun
+        If ``True``, skip existing run lookup and force a fresh run.
+
+    Returns
+    -------
+    dict[str, Any]
+        Training result with a ``loaded_existing`` flag indicating whether
+        results were loaded from a previous run or newly computed.
+
+    """
+    _validate_data_bundle(data_bundle)
+
+    if trial is not None:
+        _validate_prune_metric(prune_metric)
+
+    device = _to_device(device)
+    model = model.to(device)
+
+    if run_name is None:
+        run_name = _build_auto_run_name(
+            model=model,
+            trial=trial,
+            run_name_suffix=run_name_suffix,
+        )
+
+    if base_output_dir is None:
+        base_output_dir = _get_default_base_output_dir()
+
+    run_config = build_run_config(
+        data_bundle=data_bundle,
+        model=model,
+        optimizer=optimizer,
+        criterion=criterion,
+        num_epochs=num_epochs,
+        scheduler=scheduler,
+        extra_config=extra_config,
+        seed=seed,
+        deterministic=deterministic,
+        device=device,
+    )
+
+    if save_outputs and not force_rerun:
+        existing_run_dir = _find_matching_completed_run(
+            base_output_dir=base_output_dir,
+            run_name=run_name,
+            run_config=run_config,
+        )
+        if existing_run_dir is not None:
+            return _load_saved_run_result(existing_run_dir)
+
+    result = run_experiment(
+        data_bundle=data_bundle,
+        model=model,
+        optimizer=optimizer,
+        criterion=criterion,
+        device=device,
+        num_epochs=num_epochs,
+        scheduler=scheduler,
+        trial=trial,
+        project_name=project_name,
+        entity=entity,
+        run_name=run_name,
+        run_name_suffix=run_name_suffix,
+        tags=tags,
+        notes=notes,
+        group=group,
+        job_type=job_type,
+        extra_config=extra_config,
+        prune_metric=prune_metric,
+        seed=seed,
+        deterministic=deterministic,
+        save_outputs=save_outputs,
+        base_output_dir=base_output_dir,
+    )
+    result["loaded_existing"] = False
+    return result
+
+
 def run_experiment(
     *,
     data_bundle: Any,
@@ -830,6 +1065,7 @@ def run_experiment(
         result["run_config"] = run_config
         result["run_name"] = run_name
         result["output_dir"] = str(output_dir) if output_dir is not None else None
+        result["loaded_existing"] = False
 
         return result
 
@@ -842,28 +1078,30 @@ def export_best_model_to_artifacts(
     overwrite: bool = False,
 ) -> dict[str, str]:
     """
-    Copy the saved best model from a finished run into ``artifacts/01_cnn_icosimal``.
+    Copy the full saved experiment directory into ``artifacts/01_cnn_icosimal``.
 
-    The output file name is generated automatically from the run name,
-    unless ``export_name`` is provided manually.
+    The exported artifact is a complete run package containing all files needed
+    to reload the run later, not only the best model weights.
 
     Expected files inside ``output_dir``:
     - ``best_model.pt``
     - ``config.json``
+    - ``summary.json``
+    - ``history.json``
 
     Parameters
     ----------
     output_dir
         Local experiment output directory created by ``run_experiment``.
     artifact_dir
-        Optional target directory. If ``None``, the default path
+        Optional target base directory. If ``None``, the default path
         ``repo_root/artifacts/01_cnn_icosimal`` is used.
     export_name
-        Optional explicit file name without extension or with ``.pt``.
-        If omitted, a name like
-        ``TestCNN__baseline_no_aug_128.pt`` is generated.
+        Optional explicit artifact directory name.
+        If omitted, the directory name is derived from the run name without
+        timestamp, for example ``TestCNN__baseline_no_aug_128``.
     overwrite
-        Whether an existing target file may be overwritten.
+        Whether an existing target directory may be overwritten.
 
     Returns
     -------
@@ -873,16 +1111,17 @@ def export_best_model_to_artifacts(
     """
     output_dir = Path(output_dir)
 
-    best_model_path = output_dir / "best_model.pt"
-    config_path = output_dir / "config.json"
+    required_files = [
+        output_dir / "best_model.pt",
+        output_dir / "config.json",
+        output_dir / "summary.json",
+        output_dir / "history.json",
+    ]
 
-    if not best_model_path.exists():
-        msg = f"Missing best model file: {best_model_path}"
-        raise FileNotFoundError(msg)
-
-    if not config_path.exists():
-        msg = f"Missing config file: {config_path}"
-        raise FileNotFoundError(msg)
+    for required_file in required_files:
+        if not required_file.exists():
+            msg = f"Missing required experiment file: {required_file}"
+            raise FileNotFoundError(msg)
 
     if artifact_dir is None:
         artifact_dir = _get_default_artifacts_dir()
@@ -892,38 +1131,27 @@ def export_best_model_to_artifacts(
 
     run_name = output_dir.name
 
-    if export_name is None:
-        run_name_without_timestamp = run_name.rsplit("__", maxsplit=1)[0]
-        safe_run_name = _sanitize_name_for_path(str(run_name_without_timestamp))
-        filename = f"{safe_run_name}.pt"
-    else:
-        filename = export_name if export_name.endswith(".pt") else f"{export_name}.pt"
-        filename = _sanitize_name_for_path(filename[:-3]) + ".pt"
+    export_dir_name = _sanitize_name_for_path(run_name.rsplit("__", maxsplit=1)[0]) if export_name is None else _sanitize_name_for_path(export_name)
 
-    destination_path = artifact_dir / filename
+    destination_dir = artifact_dir / export_dir_name
 
-    if destination_path.exists():
+    if destination_dir.exists():
         if overwrite:
-            shutil.copy2(best_model_path, destination_path)
+            shutil.rmtree(destination_dir)
         else:
-            stem = destination_path.stem
-            suffix = destination_path.suffix
-
             counter = 2
             while True:
-                candidate_path = artifact_dir / f"{stem}_{counter}{suffix}"
-                if not candidate_path.exists():
-                    destination_path = candidate_path
+                candidate_dir = artifact_dir / f"{export_dir_name}_{counter}"
+                if not candidate_dir.exists():
+                    destination_dir = candidate_dir
                     break
                 counter += 1
 
-            shutil.copy2(best_model_path, destination_path)
-    else:
-        shutil.copy2(best_model_path, destination_path)
+    shutil.copytree(output_dir, destination_dir)
 
     return {
-        "source_best_model": str(best_model_path),
-        "destination_model": str(destination_path),
+        "source_output_dir": str(output_dir),
+        "destination_artifact_dir": str(destination_dir),
         "artifact_dir": str(artifact_dir),
-        "filename": destination_path.name,
+        "artifact_name": destination_dir.name,
     }
