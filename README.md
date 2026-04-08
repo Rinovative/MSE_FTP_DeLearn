@@ -82,7 +82,26 @@ True
 
 ---
 
-## 7. Datensatz einfügen
+## 7. `.env` Datei erstellen
+
+Für **Weights & Biases (W&B)** muss im Projektroot zusätzlich eine `.env` Datei erstellt werden.
+
+Beispiel:
+
+```env
+WANDB_API_KEY = dein_wandb_api_key
+WANDB_ENTITY = dein_wandb_team
+WANDB_PROJECT = projekt_name
+```
+
+Wichtig:
+
+* `.env` **nicht ins Repository committen**
+* echte Keys niemals in Code oder README speichern
+
+---
+
+## 8. Datensatz einfügen
 
 Die Daten sind **nicht im Repository enthalten**.
 
@@ -102,7 +121,7 @@ data/
 
 ---
 
-## 8. Projekt verwenden
+## 9. Projekt verwenden
 
 Nach dem Setup kann alles direkt in VS Code ausgeführt werden:
 
@@ -117,7 +136,7 @@ python projects/01_cnn_icosimal/src/train.py
 
 ---
 
-## 9. Neue Pakete hinzufügen
+## 10. Neue Pakete hinzufügen
 
 Neue Abhängigkeiten werden über **uv** hinzugefügt.
 
@@ -151,7 +170,7 @@ Die Konfiguration ist zusätzlich in der `pyproject.toml` hinterlegt → reprodu
 
 ---
 
-## 10. Ruff (Linting & Formatting)
+## 11. Ruff (Linting & Formatting)
 
 Ruff läuft automatisch in VS Code (Format on Save).
 

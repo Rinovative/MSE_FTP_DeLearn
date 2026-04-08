@@ -17,12 +17,13 @@ dependencies = [
     "optuna>=4.8.0",
     "pandas>=3.0.1",
     "pillow>=12.1.1",
+    "python-dotenv>=1.2.2",
     "scikit-learn>=1.8.0",
     "torch>=2.11.0",
     "torchaudio>=2.11.0",
     "torchvision>=0.26.0",
     "tqdm>=4.67.3",
-    "wandb>=0.25.1",
+    "wandb==0.24.2",
 ]
 
 [dependency-groups]
