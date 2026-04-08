@@ -349,7 +349,7 @@ def train_model(
             f"train_acc={train_metrics['accuracy']:.4f} | "
             f"val_loss={val_metrics['loss']:.4f} | "
             f"val_acc={val_metrics['accuracy']:.4f} | "
-            f"lr={(current_lr if current_lr is not None else float('nan')):.6f}"
+            f"lr={(current_lr if current_lr is not None else float('nan')):.4g}"
         )
 
     model.load_state_dict(best_state_dict)

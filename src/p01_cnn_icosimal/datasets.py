@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from torch.utils.data import DataLoader
@@ -130,7 +129,7 @@ def _resolve_split_dirs(data_root: str | Path) -> tuple[Path, Path]:
 
 def _seed_worker(worker_id: int) -> None:
     """
-    Seed numpy and python random inside each dataloader worker.
+    Seed python random inside each dataloader worker.
 
     Parameters
     ----------
@@ -145,7 +144,6 @@ def _seed_worker(worker_id: int) -> None:
     """
     del worker_id
     worker_seed = torch.initial_seed() % 2**32
-    np.random.default_rng(worker_seed)
     random.seed(worker_seed)
 
 

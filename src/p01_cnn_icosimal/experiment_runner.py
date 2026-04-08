@@ -2,20 +2,23 @@
 Experiment runner with Weights & Biases integration.
 
 This module builds a reproducible run configuration from the provided objects,
-creates a W&B run, and executes the training loop. Optional Optuna trials can
-reuse the same ``run_experiment`` function, receive epoch-wise reports, and
-trigger pruning cleanly.
+creates a W&B run, executes the training loop, stores local experiment
+artifacts in a clean per-run directory structure, and provides a helper
+function to export the saved best model into a versionable artifacts folder.
+
+The code is designed to work when experiments are launched from notebooks.
 """
 
 from __future__ import annotations
 
+import json
 import os
-import random
+import shutil
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import optuna
 import torch
 import wandb
@@ -32,28 +35,6 @@ def _to_device(device: torch.device | str) -> torch.device:
     if isinstance(device, torch.device):
         return device
     return torch.device(device)
-
-
-def _set_seed(
-    seed: int,
-    *,
-    deterministic: bool = True,
-) -> None:
-    """Set all relevant random seeds for reproducible experiments."""
-    random.seed(seed)
-    np.random.default_rng(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-
-    if deterministic:
-        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-        torch.use_deterministic_algorithms(True)
-    else:
-        torch.backends.cudnn.deterministic = False
-        torch.backends.cudnn.benchmark = True
-        torch.use_deterministic_algorithms(False)
 
 
 def _bundle_get(data_bundle: Any, key: str) -> Any:
@@ -89,7 +70,7 @@ def _is_config_value(value: Any) -> bool:
 
 
 def _normalize_for_config(value: Any) -> Any:
-    """Normalize values so they can be safely logged to W&B."""
+    """Normalize values so they can be safely logged to W&B and JSON."""
     if isinstance(value, (Path, torch.device, torch.dtype)):
         return str(value)
 
@@ -145,6 +126,7 @@ def _split_data_config(data_config: dict[str, Any]) -> dict[str, dict[str, Any]]
         "dataloader": {},
         "transforms": {},
         "normalization": {},
+        "reproducibility": {},
         "other": {},
     }
 
@@ -158,6 +140,7 @@ def _split_data_config(data_config: dict[str, Any]) -> dict[str, dict[str, Any]]
         "num_val_samples",
         "train_dir",
         "val_dir",
+        "class_to_idx",
     }
 
     dataloader_keys = {
@@ -167,6 +150,8 @@ def _split_data_config(data_config: dict[str, Any]) -> dict[str, dict[str, Any]]
         "persistent_workers",
         "drop_last",
         "shuffle",
+        "stats_batch_size",
+        "stats_num_workers",
     }
 
     transform_keys = {
@@ -182,6 +167,10 @@ def _split_data_config(data_config: dict[str, Any]) -> dict[str, dict[str, Any]]
         "std",
     }
 
+    reproducibility_keys = {
+        "seed",
+    }
+
     for key, value in data_config.items():
         if key in dataset_keys:
             grouped["dataset"][key] = value
@@ -191,6 +180,8 @@ def _split_data_config(data_config: dict[str, Any]) -> dict[str, dict[str, Any]]
             grouped["transforms"][key] = value
         elif key in normalization_keys:
             grouped["normalization"][key] = value
+        elif key in reproducibility_keys:
+            grouped["reproducibility"][key] = value
         else:
             grouped["other"][key] = value
 
@@ -360,6 +351,88 @@ def _build_auto_run_name(
             name_parts.append(clean_suffix)
 
     return "__".join(name_parts)
+
+
+def _sanitize_name_for_path(name: str) -> str:
+    """Make a name safe for filesystem paths."""
+    safe = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in name)
+    while "__" in safe:
+        safe = safe.replace("__", "_")
+    return safe.strip("_")
+
+
+def _get_repo_root() -> Path:
+    """
+    Resolve the repository root from this file location.
+
+    Expected structure:
+    repo_root/
+        src/
+            p01_cnn_icosimal/
+                experiment_runner.py
+    """
+    return Path(__file__).resolve().parents[2]
+
+
+def _get_default_base_output_dir() -> Path:
+    """Return the default local output directory for this project."""
+    return _get_repo_root() / "outputs" / "01_cnn_icosimal"
+
+
+def _get_default_artifacts_dir() -> Path:
+    """Return the default directory for versionable exported best models."""
+    return _get_repo_root() / "artifacts" / "01_cnn_icosimal"
+
+
+def _make_output_dir(
+    *,
+    base_output_dir: str | Path,
+    run_name: str,
+) -> Path:
+    """Create a unique local output directory for one experiment run."""
+    timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+    safe_run_name = _sanitize_name_for_path(run_name)
+    run_dir = Path(base_output_dir) / f"{safe_run_name}__{timestamp}"
+    run_dir.mkdir(parents=True, exist_ok=False)
+    return run_dir
+
+
+def _save_json(data: dict[str, Any], path: Path) -> None:
+    """Save a dictionary as formatted JSON."""
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(data, file, indent=2, ensure_ascii=False)
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    """Load a JSON file and return its dictionary content."""
+    with path.open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def _save_experiment_artifacts(
+    *,
+    output_dir: Path,
+    result: dict[str, Any],
+    run_config: dict[str, Any],
+    model: torch.nn.Module,
+) -> None:
+    """Save config, history, summary, and model checkpoints for one run."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    summary = {
+        "best_epoch": result["best_epoch"],
+        "best_val_accuracy": result["best_val_accuracy"],
+        "best_val_loss": result["best_val_loss"],
+    }
+
+    history = result["history"]
+
+    _save_json(run_config, output_dir / "config.json")
+    _save_json(summary, output_dir / "summary.json")
+    _save_json(history, output_dir / "history.json")
+
+    torch.save(result["best_state_dict"], output_dir / "best_model.pt")
+    torch.save(model.state_dict(), output_dir / "last_model.pt")
 
 
 def _update_last_epoch_info(
@@ -573,6 +646,8 @@ def run_experiment(
     prune_metric: str = "val_accuracy",
     seed: int | None = None,
     deterministic: bool = True,
+    save_outputs: bool = True,
+    base_output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """
     Run one full experiment with W&B logging and optional Optuna reporting.
@@ -623,35 +698,20 @@ def run_experiment(
         Optional random seed used for reproducibility.
     deterministic
         Whether deterministic torch execution is requested.
+    save_outputs
+        Whether local output artifacts should be stored on disk.
+    base_output_dir
+        Base directory for local outputs. If ``None``, the default path
+        ``repo_root/outputs/01_cnn_icosimal`` is used.
 
     Returns
     -------
     dict[str, Any]
-        Training result dictionary extended with the run config and W&B run
-        metadata.
-
-    Raises
-    ------
-    KeyError
-        If the data bundle is missing required keys or the pruning metric is
-        missing in the epoch callback payload.
-    AttributeError
-        If the data bundle is missing required attributes.
-    TypeError
-        If invalid object types are returned or provided.
-    ValueError
-        If invalid values are provided for Optuna reporting.
-    optuna.TrialPruned
-        If the Optuna pruner decides to prune the current trial.
-    Exception
-        Any exception raised during training is re-raised after updating the
-        W&B run summary.
+        Training result dictionary extended with the run config and local
+        output metadata.
 
     """
     _validate_data_bundle(data_bundle)
-
-    if seed is not None:
-        _set_seed(seed, deterministic=deterministic)
 
     if trial is not None:
         _validate_prune_metric(prune_metric)
@@ -672,6 +732,16 @@ def run_experiment(
             model=model,
             trial=trial,
             run_name_suffix=run_name_suffix,
+        )
+
+    if base_output_dir is None:
+        base_output_dir = _get_default_base_output_dir()
+
+    output_dir: Path | None = None
+    if save_outputs:
+        output_dir = _make_output_dir(
+            base_output_dir=base_output_dir,
+            run_name=run_name,
         )
 
     run_config = build_run_config(
@@ -725,6 +795,8 @@ def run_experiment(
     except optuna.TrialPruned:
         _update_wandb_summary_from_epoch_info(wandb_run, last_epoch_info)
         wandb_run.summary["status"] = "pruned"
+        if output_dir is not None:
+            wandb_run.summary["output_dir"] = str(output_dir)
         wandb_run.finish()
         raise
 
@@ -733,11 +805,125 @@ def run_experiment(
         wandb_run.summary["status"] = "failed"
         wandb_run.summary["exception_type"] = exc.__class__.__name__
         wandb_run.summary["exception_message"] = str(exc)
+        if output_dir is not None:
+            wandb_run.summary["output_dir"] = str(output_dir)
         wandb_run.finish()
         raise
 
     else:
+        if output_dir is not None:
+            _save_experiment_artifacts(
+                output_dir=output_dir,
+                result=result,
+                run_config=run_config,
+                model=model,
+            )
+
         _update_wandb_summary_from_result(wandb_run, result)
         wandb_run.summary["status"] = "finished"
+
+        if output_dir is not None:
+            wandb_run.summary["output_dir"] = str(output_dir)
+
         wandb_run.finish()
+
+        result["run_config"] = run_config
+        result["run_name"] = run_name
+        result["output_dir"] = str(output_dir) if output_dir is not None else None
+
         return result
+
+
+def export_best_model_to_artifacts(
+    *,
+    output_dir: str | Path,
+    artifact_dir: str | Path | None = None,
+    export_name: str | None = None,
+    overwrite: bool = False,
+) -> dict[str, str]:
+    """
+    Copy the saved best model from a finished run into ``artifacts/01_cnn_icosimal``.
+
+    The output file name is generated automatically from the run name,
+    unless ``export_name`` is provided manually.
+
+    Expected files inside ``output_dir``:
+    - ``best_model.pt``
+    - ``config.json``
+
+    Parameters
+    ----------
+    output_dir
+        Local experiment output directory created by ``run_experiment``.
+    artifact_dir
+        Optional target directory. If ``None``, the default path
+        ``repo_root/artifacts/01_cnn_icosimal`` is used.
+    export_name
+        Optional explicit file name without extension or with ``.pt``.
+        If omitted, a name like
+        ``TestCNN__baseline_no_aug_128.pt`` is generated.
+    overwrite
+        Whether an existing target file may be overwritten.
+
+    Returns
+    -------
+    dict[str, str]
+        Information about source and destination paths.
+
+    """
+    output_dir = Path(output_dir)
+
+    best_model_path = output_dir / "best_model.pt"
+    config_path = output_dir / "config.json"
+
+    if not best_model_path.exists():
+        msg = f"Missing best model file: {best_model_path}"
+        raise FileNotFoundError(msg)
+
+    if not config_path.exists():
+        msg = f"Missing config file: {config_path}"
+        raise FileNotFoundError(msg)
+
+    if artifact_dir is None:
+        artifact_dir = _get_default_artifacts_dir()
+
+    artifact_dir = Path(artifact_dir)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    run_name = output_dir.name
+
+    if export_name is None:
+        run_name_without_timestamp = run_name.rsplit("__", maxsplit=1)[0]
+        safe_run_name = _sanitize_name_for_path(str(run_name_without_timestamp))
+        filename = f"{safe_run_name}.pt"
+    else:
+        filename = export_name if export_name.endswith(".pt") else f"{export_name}.pt"
+        filename = _sanitize_name_for_path(filename[:-3]) + ".pt"
+
+    destination_path = artifact_dir / filename
+
+    if destination_path.exists():
+        if overwrite:
+            shutil.copy2(best_model_path, destination_path)
+        else:
+            stem = destination_path.stem
+            suffix = destination_path.suffix
+
+            counter = 2
+            while True:
+                candidate_path = artifact_dir / f"{stem}_{counter}{suffix}"
+                if not candidate_path.exists():
+                    destination_path = candidate_path
+                    break
+                counter += 1
+
+            shutil.copy2(best_model_path, destination_path)
+    else:
+        shutil.copy2(best_model_path, destination_path)
+
+    return {
+        "source_best_model": str(best_model_path),
+        "destination_model": str(destination_path),
+        "artifact_dir": str(artifact_dir),
+        "filename": destination_path.name,
+    }
