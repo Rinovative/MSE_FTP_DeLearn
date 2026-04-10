@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
-from torch.nn import functional as f
+from torch.nn import functional as F
 
 
 class TestCNN(nn.Module):
@@ -54,17 +54,17 @@ class TestCNN(nn.Module):
 
         """
         # Conv block 1
-        x = self.pool(f.relu(self.bn1(self.conv1(x))))
+        x = self.pool(F.relu(self.bn1(self.conv1(x))))
 
         # Conv block 2
-        x = self.pool(f.relu(self.bn2(self.conv2(x))))
+        x = self.pool(F.relu(self.bn2(self.conv2(x))))
 
         # Conv block 3
-        x = self.pool(f.relu(self.bn3(self.conv3(x))))
+        x = self.pool(F.relu(self.bn3(self.conv3(x))))
 
         # Fixed pooling, flatten, and fully connected layers
         x = self.final_pool(x)
         x = torch.flatten(x, start_dim=1)
-        x = f.relu(self.fc1(x))
+        x = F.relu(self.fc1(x))
         x = self.dropout(x)
         return self.fc2(x)
