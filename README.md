@@ -1,3 +1,5 @@
+[![Open 01_cnn_icosimal in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Rinovative/MSE_FTP_DeLearn/blob/main/notebooks/01_cnn_icosimal.ipynb)
+
 # MSE_FTP_DeLearn – Setup Guide
 
 Dieses Repository enthält mehrere Deep-Learning-Projekte (PyTorch, Optuna, W&B) und nutzt **uv** für das Environment-Management.
