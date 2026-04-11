@@ -1,0 +1,133 @@
+{
+  "data": {
+    "dataset": {
+      "dataset_name": "iCoSimal_V3_128_baseline",
+      "data_root": "/content/MSE_FTP_DeLearn/data/icosimal_img_class_03/data_uniform_224_224_sets",
+      "train_dir": "/content/MSE_FTP_DeLearn/data/icosimal_img_class_03/data_uniform_224_224_sets/train",
+      "val_dir": "/content/MSE_FTP_DeLearn/data/icosimal_img_class_03/data_uniform_224_224_sets/validate",
+      "image_size": 128,
+      "class_to_idx": {
+        "cat": 0,
+        "chicken": 1,
+        "cow": 2,
+        "dog": 3,
+        "elephant": 4,
+        "horse": 5,
+        "rabbit": 6,
+        "sheep": 7,
+        "squirrel": 8,
+        "zebra": 9
+      },
+      "num_classes": 10,
+      "class_names": [
+        "cat",
+        "chicken",
+        "cow",
+        "dog",
+        "elephant",
+        "horse",
+        "rabbit",
+        "sheep",
+        "squirrel",
+        "zebra"
+      ],
+      "num_train_samples": 24000,
+      "num_val_samples": 6000
+    },
+    "dataloader": {
+      "batch_size": 64,
+      "num_workers": 8,
+      "pin_memory": true,
+      "stats_batch_size": 64,
+      "stats_num_workers": 8
+    },
+    "transforms": {
+      "use_flip": false,
+      "randaugment_num_ops": 0,
+      "randaugment_magnitude": 9
+    },
+    "normalization": {
+      "mean": [
+        0.49655770658114756,
+        0.4791732902172965,
+        0.3941518275824205
+      ],
+      "std": [
+        0.2512556594461678,
+        0.2456270009649158,
+        0.258632468965281
+      ]
+    },
+    "reproducibility": {
+      "seed": 42
+    }
+  },
+  "model": {
+    "architecture": {
+      "model_name": "SimpleCNN"
+    },
+    "parameters": {
+      "num_parameters_total": 4200810,
+      "num_parameters_trainable": 4200810
+    },
+    "details": {
+      "num_classes": 10,
+      "input_channels": 3
+    }
+  },
+  "optimization": {
+    "optimizer": {
+      "name": "Adam",
+      "num_param_groups": 1,
+      "lr": 0.001,
+      "betas": [
+        0.9,
+        0.999
+      ],
+      "eps": 1e-08,
+      "weight_decay": 0.0001,
+      "amsgrad": false,
+      "maximize": false,
+      "foreach": null,
+      "capturable": false,
+      "differentiable": false,
+      "fused": null,
+      "decoupled_weight_decay": false
+    },
+    "scheduler": {
+      "name": "ReduceLROnPlateau",
+      "factor": 0.5,
+      "default_min_lr": 0,
+      "min_lrs": [
+        0
+      ],
+      "patience": 2,
+      "cooldown": 0,
+      "eps": 1e-08,
+      "last_epoch": 0,
+      "mode_worse": Infinity,
+      "mode": "min",
+      "threshold": 0.0001,
+      "threshold_mode": "rel",
+      "best": Infinity,
+      "cooldown_counter": 0,
+      "num_bad_epochs": 0
+    },
+    "criterion": {
+      "name": "CrossEntropyLoss",
+      "training": true,
+      "reduction": "mean",
+      "ignore_index": -100,
+      "label_smoothing": 0.0
+    }
+  },
+  "training": {
+    "num_epochs": 50,
+    "seed": 42,
+    "deterministic": true
+  },
+  "runtime": {
+    "device": "cuda",
+    "cuda_available": true
+  }
+}

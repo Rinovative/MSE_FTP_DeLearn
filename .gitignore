@@ -17,6 +17,7 @@ data/**/*
 !data/**/.gitkeep
 wandb/
 outputs/
+data.zip
 
 # Build
 build/
