@@ -5,13 +5,14 @@ import torch.nn.functional as f
 class SimpleCNN(nn.Module):
     """A simple CNN model for image classification."""
 
-    def __init__(self, num_classes: int = 10, input_channels: int = 3) -> None:
+    def __init__(self, num_classes: int = 10, input_channels: int = 3, image_size: int = 128) -> None:
         """
         Initialize the SimpleCNN model.
 
         Args:
             num_classes: Number of output classes.
             input_channels: Number of input channels.
+            image_size: Size of the input images.
 
         """
         super().__init__()
@@ -26,8 +27,10 @@ class SimpleCNN(nn.Module):
         # For 128x128 inputs:
         # 128 -> 64 -> 32 after two MaxPool layers
 
+        fc_input_size = 32 * (image_size // 4) * (image_size // 4)
+
         # Fully connected layers
-        self.fc1 = nn.Linear(32 * 32 * 32, 128)
+        self.fc1 = nn.Linear(fc_input_size, 128)
         self.fc2 = nn.Linear(128, num_classes)
 
 
@@ -56,4 +59,5 @@ class SimpleCNN(nn.Module):
         return {
             "num_classes": self.fc2.out_features,
             "input_channels": self.conv1.in_channels,
+            "image_size": self.image_size,
         }
