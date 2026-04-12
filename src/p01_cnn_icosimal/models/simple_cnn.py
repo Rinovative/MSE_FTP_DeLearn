@@ -17,6 +17,8 @@ class SimpleCNN(nn.Module):
         """
         super().__init__()
 
+        self.image_size = image_size
+
         # Convolutional layers
         self.conv1 = nn.Conv2d(input_channels, 16, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
@@ -55,9 +57,4 @@ class SimpleCNN(nn.Module):
 
         return x
     
-    def get_model_config(self) -> dict:
-        return {
-            "num_classes": self.fc2.out_features,
-            "input_channels": self.conv1.in_channels,
-            "image_size": self.image_size,
-        }
+    
