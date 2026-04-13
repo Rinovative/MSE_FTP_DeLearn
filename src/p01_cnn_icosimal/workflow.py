@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import random
+import optuna
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -209,3 +210,44 @@ def export_experiment_model(
     print("Exported artifact:", export_result["destination_artifact_dir"])
 
     return export_result
+
+
+def run_optuna_block(
+    *,
+    study_name: str,
+    objective_fn: Callable[[optuna.Trial], float],
+    n_trials: int = 10,
+    direction: str = "maximize",
+) -> optuna.Study:
+    """
+    Run a general Optuna hyperparameter search study.
+
+    Parameters
+    ----------
+    study_name
+        Name of the Optuna study.
+    objective_fn
+        Objective function that takes an Optuna trial and returns a metric value.
+    n_trials
+        Number of trials to run.
+    direction
+        Optimization direction, either 'maximize' or 'minimize'.
+
+    Returns
+    -------
+    optuna.Study
+        The completed Optuna study.
+
+    """
+    study = optuna.create_study(
+        study_name=study_name,
+        direction=direction,
+    )
+    study.optimize(objective_fn, n_trials=n_trials)
+
+    print("Study name    :", study_name)
+    print("Best trial    :", study.best_trial.number)
+    print("Best params   :", study.best_params)
+    print("Best value    :", f"{study.best_value:.4f}")
+
+    return study

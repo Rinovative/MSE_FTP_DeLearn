@@ -6,7 +6,7 @@ class BigCNN(nn.Module):
     """A big-sized CNN model for image classification with two additional convolutional layers.
     Additionally it includes batch normalization"""
 
-    def __init__(self, num_classes: int = 10, input_channels: int = 3, image_size: int = 128) -> None:
+    def __init__(self, num_classes: int = 10, input_channels: int = 3, image_size: int = 128, dropout: float = 0.0) -> None:
         """
         Initialize the BigCNN model.
 
@@ -14,6 +14,7 @@ class BigCNN(nn.Module):
             num_classes: Number of output classes.
             input_channels: Number of input channels.
             image_size: Size of the input images.
+            dropout: Dropout probability for the fully connected layers.
 
         """
         super().__init__()
@@ -45,6 +46,9 @@ class BigCNN(nn.Module):
         self.fc1 = nn.Linear(fc_input_size, 128)
         self.fc2 = nn.Linear(128, num_classes)
 
+        # Dropout
+        self.dropout_rate = dropout
+        self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -64,6 +68,7 @@ class BigCNN(nn.Module):
         # Flatten and fully connected layers
         x = torch.flatten(x, start_dim=1)
         x = F.relu(self.fc1(x))
+        x = self.dropout(x)
         x = self.fc2(x)
 
         return x
