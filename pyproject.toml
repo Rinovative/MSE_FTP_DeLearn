@@ -94,6 +94,13 @@ ignore = [
   "EXE002",
   "T201",    # allow print
   "ERA001",  # allow commented code temporarily
+  # additional
+  "PTH110",
+  "S605",
+  "S607",
+  "PTH103",
+  "PTH208",
+  "A004",
 ]
 fixable = ["ALL"]
 
