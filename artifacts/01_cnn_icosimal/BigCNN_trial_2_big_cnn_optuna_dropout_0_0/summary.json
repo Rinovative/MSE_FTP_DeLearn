@@ -1,0 +1,5 @@
+{
+  "best_epoch": 25,
+  "best_val_accuracy": 0.7308333333333333,
+  "best_val_loss": 1.251422354221344
+}
