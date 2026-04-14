@@ -18,6 +18,7 @@ data/**/*
 wandb/
 outputs/
 data.zip
+release_uploads/
 
 # Build
 build/

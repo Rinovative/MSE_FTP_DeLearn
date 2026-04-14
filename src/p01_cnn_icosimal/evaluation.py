@@ -5,6 +5,7 @@ This module provides:
 - loading saved experiment outputs,
 - collecting predictions from a dataloader,
 - reusable plotting functions,
+- optional Grad-CAM overlays for example predictions,
 - a notebook widget with one central control area,
 - export of the currently visible plot.
 
@@ -207,6 +208,7 @@ def _apply_button_style(button: Button | ToggleButton, *, role: str) -> None:
 def _figure_to_widget(fig: Figure, *, max_width: str = "950px") -> Image:
     """Render a Matplotlib figure into a compact ipywidgets Image widget."""
     buffer = BytesIO()
+    fig.canvas.draw()
     fig.savefig(buffer, format="png", dpi=130, bbox_inches="tight")
     png_bytes = buffer.getvalue()
     buffer.close()
@@ -225,7 +227,6 @@ def _figure_to_widget(fig: Figure, *, max_width: str = "950px") -> Image:
     )
 
 
-@torch.inference_mode()
 def collect_predictions(
     *,
     model: torch.nn.Module,
@@ -248,27 +249,28 @@ def collect_predictions(
 
     collected = 0
 
-    for batch_images, batch_targets in dataloader:
-        images = batch_images.to(device, non_blocking=True)
-        targets = batch_targets.to(device, non_blocking=True)
+    with torch.no_grad():
+        for batch_images, batch_targets in dataloader:
+            images = batch_images.to(device, non_blocking=True)
+            targets = batch_targets.to(device, non_blocking=True)
 
-        logits = model(images)
-        probabilities = functional.softmax(logits, dim=1)
-        confidences, predictions = probabilities.max(dim=1)
+            logits = model(images)
+            probabilities = functional.softmax(logits, dim=1)
+            confidences, predictions = probabilities.max(dim=1)
 
-        all_targets.append(targets.detach().cpu())
-        all_predictions.append(predictions.detach().cpu())
-        all_probabilities.append(probabilities.detach().cpu())
-        all_confidences.append(confidences.detach().cpu())
-        all_logits.append(logits.detach().cpu())
+            all_targets.append(targets.detach().cpu())
+            all_predictions.append(predictions.detach().cpu())
+            all_probabilities.append(probabilities.detach().cpu())
+            all_confidences.append(confidences.detach().cpu())
+            all_logits.append(logits.detach().cpu())
 
-        if return_images:
-            all_images.append(batch_images.detach().cpu())
+            if return_images:
+                all_images.append(batch_images.detach().cpu().clone())
 
-        collected += targets.size(0)
+            collected += targets.size(0)
 
-        if max_samples is not None and collected >= max_samples:
-            break
+            if max_samples is not None and collected >= max_samples:
+                break
 
     targets_tensor = torch.cat(all_targets, dim=0)
     predictions_tensor = torch.cat(all_predictions, dim=0)
@@ -629,6 +631,223 @@ def create_examples_figure(
     return fig, axes_array, metadata
 
 
+def _resolve_grad_cam_target_layer(
+    model: torch.nn.Module,
+    target_layer_name: str | None = None,
+) -> tuple[str, torch.nn.Module]:
+    """Resolve the target convolutional layer for Grad-CAM."""
+    named_modules = dict(model.named_modules())
+
+    if target_layer_name is not None:
+        if target_layer_name not in named_modules:
+            msg = f"Unknown Grad-CAM target layer: {target_layer_name}"
+            raise ValueError(msg)
+
+        target_layer = named_modules[target_layer_name]
+        if not isinstance(target_layer, torch.nn.Conv2d):
+            msg = f"Grad-CAM target layer must be torch.nn.Conv2d, got {type(target_layer).__name__}."
+            raise TypeError(msg)
+
+        return target_layer_name, target_layer
+
+    conv_layers = [(name, module) for name, module in model.named_modules() if isinstance(module, torch.nn.Conv2d)]
+
+    if not conv_layers:
+        msg = "Grad-CAM requires at least one Conv2d layer."
+        raise ValueError(msg)
+
+    return conv_layers[-1]
+
+
+def compute_grad_cam(
+    *,
+    model: torch.nn.Module,
+    images: torch.Tensor,
+    device: torch.device | str,
+    target_class_indices: np.ndarray | list[int] | torch.Tensor | None = None,
+    target_layer_name: str | None = None,
+) -> dict[str, Any]:
+    """Compute Grad-CAM heatmaps for a batch of images."""
+    device = _to_device(device)
+    model = model.to(device)
+
+    expected_image_dims = 3
+    if images.ndim == expected_image_dims:
+        images = images.unsqueeze(0)
+
+    # Images may come from collect_predictions(), which runs in inference mode.
+    # Grad-CAM needs normal tensors that autograd may use in the forward/backward pass.
+    images = images.detach().clone()
+
+    layer_name, target_layer = _resolve_grad_cam_target_layer(
+        model=model,
+        target_layer_name=target_layer_name,
+    )
+
+    activations: torch.Tensor | None = None
+    gradients: torch.Tensor | None = None
+
+    def _forward_hook(
+        _module: torch.nn.Module,
+        _inputs: tuple[torch.Tensor, ...],
+        output: torch.Tensor,
+    ) -> None:
+        nonlocal activations
+        activations = output.detach()
+
+    def _backward_hook(
+        _module: torch.nn.Module,
+        _grad_input: Any,
+        grad_output: Any,
+    ) -> None:
+        nonlocal gradients
+
+        if not isinstance(grad_output, tuple) or len(grad_output) == 0 or grad_output[0] is None:
+            msg = "Grad-CAM backward hook received no gradients."
+            raise RuntimeError(msg)
+
+        if not isinstance(grad_output[0], torch.Tensor):
+            msg = "Grad-CAM backward hook did not receive a tensor gradient."
+            raise TypeError(msg)
+
+        gradients = grad_output[0].detach()
+
+    was_training = model.training
+    model.eval()
+
+    forward_handle = target_layer.register_forward_hook(_forward_hook)
+    backward_handle = target_layer.register_full_backward_hook(_backward_hook)
+
+    try:
+        inputs = images.detach().clone().to(device, non_blocking=True)
+        inputs.requires_grad_(True)
+
+        model.zero_grad(set_to_none=True)
+        logits = model(inputs)
+
+        if target_class_indices is None:
+            target_tensor = logits.argmax(dim=1)
+        else:
+            target_tensor = torch.as_tensor(target_class_indices, device=device, dtype=torch.long)
+            if target_tensor.ndim == 0:
+                target_tensor = target_tensor.unsqueeze(0)
+
+            if target_tensor.numel() != inputs.size(0):
+                msg = f"Number of Grad-CAM targets does not match batch size. Got {target_tensor.numel()} targets for batch size {inputs.size(0)}."
+                raise ValueError(msg)
+
+        selected_scores = logits.gather(1, target_tensor.view(-1, 1)).sum()
+        selected_scores.backward()
+
+        if activations is None or gradients is None:
+            msg = "Grad-CAM hooks did not capture activations/gradients."
+            raise RuntimeError(msg)
+
+        weights = gradients.mean(dim=(2, 3), keepdim=True)
+        cams = torch.relu((weights * activations).sum(dim=1, keepdim=True))
+
+        cams = functional.interpolate(
+            cams,
+            size=inputs.shape[-2:],
+            mode="bilinear",
+            align_corners=False,
+        )
+
+        cams = cams.squeeze(1)
+
+        cams_flat = cams.flatten(start_dim=1)
+        cam_min = cams_flat.min(dim=1)[0].view(-1, 1, 1)
+        cam_max = cams_flat.max(dim=1)[0].view(-1, 1, 1)
+        cams = (cams - cam_min) / (cam_max - cam_min + 1e-8)
+
+        predictions = logits.argmax(dim=1)
+
+        return {
+            "cams": cams.detach().cpu(),
+            "predictions": predictions.detach().cpu().numpy(),
+            "target_class_indices": target_tensor.detach().cpu().numpy(),
+            "target_layer_name": layer_name,
+        }
+
+    finally:
+        forward_handle.remove()
+        backward_handle.remove()
+        model.zero_grad(set_to_none=True)
+        if was_training:
+            model.train()
+
+
+def create_examples_with_grad_cam_figure(
+    *,
+    images: torch.Tensor,
+    grad_cams: torch.Tensor,
+    targets: np.ndarray,
+    predictions: np.ndarray,
+    confidences: np.ndarray,
+    grad_cam_target_indices: np.ndarray,
+    class_names: list[str],
+    mean: list[float],
+    std: list[float],
+    target_layer_name: str,
+    selected_class_idx: int | None = None,
+    only_wrong: bool = False,
+    page: int = 0,
+    total_pages: int = 1,
+    overlay_alpha: float = 0.25,
+    cols: int = 4,
+) -> tuple[Figure, np.ndarray]:
+    """Create an examples figure with Grad-CAM overlays."""
+    num_images = images.size(0)
+    rows = max(1, math.ceil(max(num_images, 1) / cols))
+
+    fig, axes = plt.subplots(rows, cols, figsize=(9.4, 2.8 * rows))
+    axes_array = np.atleast_1d(axes).ravel()
+
+    denorm_images = _denormalize_images(images, mean=mean, std=std).clamp(0.0, 1.0)
+
+    title_parts = ["Prediction examples", "Grad-CAM"]
+    if selected_class_idx is not None:
+        title_parts.append(f"class={class_names[selected_class_idx]}")
+    if only_wrong:
+        title_parts.append("wrong only")
+    title_parts.append(f"page {page + 1}/{total_pages}")
+    title_parts.append(f"layer={target_layer_name}")
+
+    fig.suptitle(" | ".join(title_parts), fontsize=13, y=0.98)
+
+    if num_images == 0:
+        for ax in axes_array:
+            ax.axis("off")
+        axes_array[0].text(0.5, 0.5, "No matching samples found.", ha="center", va="center", fontsize=12)
+        fig.subplots_adjust(top=0.82, bottom=0.08, left=0.04, right=0.98, hspace=0.30, wspace=0.15)
+        return fig, axes_array
+
+    for ax_idx, ax in enumerate(axes_array):
+        ax.axis("off")
+
+        if ax_idx >= num_images:
+            continue
+
+        image = denorm_images[ax_idx].permute(1, 2, 0).cpu().numpy()
+        cam = grad_cams[ax_idx].cpu().numpy()
+
+        true_idx = int(targets[ax_idx])
+        pred_idx = int(predictions[ax_idx])
+        conf = float(confidences[ax_idx])
+        cam_target_idx = int(grad_cam_target_indices[ax_idx])
+
+        ax.imshow(image)
+        ax.imshow(cam, cmap="jet", alpha=overlay_alpha)
+        ax.set_title(
+            (f"T: {class_names[true_idx]}\nP: {class_names[pred_idx]} ({conf:.2f})\nCAM: {class_names[cam_target_idx]}"),
+            fontsize=8.5,
+            pad=6,
+        )
+
+    fig.subplots_adjust(top=0.84, bottom=0.06, left=0.03, right=0.98, hspace=0.25, wspace=0.10)
+    return fig, axes_array
+
+
 def _save_current_figure(
     *,
     fig: Figure,
@@ -761,6 +980,22 @@ def create_evaluation_widget(  # noqa: C901, PLR0915
         indent=False,
     )
 
+    grad_cam_checkbox = Checkbox(
+        value=False,
+        description="Grad-CAM",
+        indent=False,
+    )
+
+    grad_cam_target_dropdown = Dropdown(
+        options=[
+            ("Predicted class", "predicted"),
+            ("True class", "true"),
+        ],
+        value="predicted",
+        description="CAM target:",
+        layout=Layout(width="260px"),
+    )
+
     prev_button = Button(
         description="← Prev",
         layout=Layout(width="100px"),
@@ -797,6 +1032,7 @@ def create_evaluation_widget(  # noqa: C901, PLR0915
 
     def _show_plot_widget(fig: Figure) -> None:
         plot_widget = _figure_to_widget(fig)
+        plt.close(fig)
 
         with plot_output:
             clear_output(wait=True)
@@ -821,6 +1057,7 @@ def create_evaluation_widget(  # noqa: C901, PLR0915
                         [
                             common_row,
                             HBox([class_dropdown, wrong_only_checkbox]),
+                            HBox([grad_cam_target_dropdown, grad_cam_checkbox]),
                             HBox([prev_button, next_button, page_label]),
                         ]
                     )
@@ -881,7 +1118,7 @@ def create_evaluation_widget(  # noqa: C901, PLR0915
                 return
 
             if current_view == "examples":
-                fig, _, metadata = create_examples_figure(
+                fig_examples, _, metadata = create_examples_figure(
                     images=eval_data["images"],
                     targets=eval_data["targets"],
                     predictions=eval_data["predictions"],
@@ -902,8 +1139,56 @@ def create_evaluation_widget(  # noqa: C901, PLR0915
 
                 selected_class_name = "all_classes" if class_dropdown.value is None else class_names[class_dropdown.value]
                 wrong_suffix = "wrong_only" if wrong_only_checkbox.value else "all"
-                _set_current_figure(fig, f"examples_{selected_class_name}_{wrong_suffix}_page_{metadata['page'] + 1}")
-                _show_plot_widget(fig)
+
+                if not grad_cam_checkbox.value or len(metadata["page_indices"]) == 0:
+                    _set_current_figure(
+                        fig_examples,
+                        f"examples_{selected_class_name}_{wrong_suffix}_page_{metadata['page'] + 1}",
+                    )
+                    _show_plot_widget(fig_examples)
+                    return
+
+                page_indices = metadata["page_indices"]
+
+                grad_cam_images = eval_data["images"][page_indices].detach().clone()
+                grad_cam_targets = eval_data["targets"][page_indices]
+                grad_cam_predictions = eval_data["predictions"][page_indices]
+                grad_cam_confidences = eval_data["confidences"][page_indices]
+
+                grad_cam_target_indices = grad_cam_targets if grad_cam_target_dropdown.value == "true" else grad_cam_predictions
+
+                grad_cam_result = compute_grad_cam(
+                    model=model,
+                    images=grad_cam_images,
+                    device=device,
+                    target_class_indices=grad_cam_target_indices,
+                )
+
+                plt.close(fig_examples)
+
+                fig_cam, _ = create_examples_with_grad_cam_figure(
+                    images=grad_cam_images,
+                    grad_cams=grad_cam_result["cams"],
+                    targets=grad_cam_targets,
+                    predictions=grad_cam_predictions,
+                    confidences=grad_cam_confidences,
+                    grad_cam_target_indices=grad_cam_result["target_class_indices"],
+                    class_names=class_names,
+                    mean=mean,
+                    std=std,
+                    target_layer_name=grad_cam_result["target_layer_name"],
+                    selected_class_idx=class_dropdown.value,
+                    only_wrong=wrong_only_checkbox.value,
+                    page=metadata["page"],
+                    total_pages=metadata["total_pages"],
+                )
+
+                cam_target_suffix = grad_cam_target_dropdown.value
+                _set_current_figure(
+                    fig_cam,
+                    f"examples_grad_cam_{selected_class_name}_{wrong_suffix}_{cam_target_suffix}_page_{metadata['page'] + 1}",
+                )
+                _show_plot_widget(fig_cam)
                 return
 
         msg = f"Unknown view: {current_view}"
@@ -1012,6 +1297,8 @@ def create_evaluation_widget(  # noqa: C901, PLR0915
     normalize_checkbox.observe(_on_normalize_change, names="value")
     class_dropdown.observe(_on_examples_filter_change, names="value")
     wrong_only_checkbox.observe(_on_examples_filter_change, names="value")
+    grad_cam_checkbox.observe(_on_examples_filter_change, names="value")
+    grad_cam_target_dropdown.observe(_on_examples_filter_change, names="value")
 
     prev_button.on_click(_on_prev_click)
     next_button.on_click(_on_next_click)
