@@ -1,10 +1,10 @@
 {
   "data": {
     "dataset": {
-      "dataset_name": "iCoSimal_V3_64_baseline",
-      "data_root": "/content/MSE_FTP_DeLearn/data/icosimal_img_class_03/data_uniform_224_224_sets",
-      "train_dir": "/content/MSE_FTP_DeLearn/data/icosimal_img_class_03/data_uniform_224_224_sets/train",
-      "val_dir": "/content/MSE_FTP_DeLearn/data/icosimal_img_class_03/data_uniform_224_224_sets/validate",
+      "dataset_name": "iCoSimal_V3_64_flip_randaug_2_7",
+      "data_root": "c:\\Users\\rinoa\\OneDrive - OST\\2 MSE FHO DS\\2_FS\\FTP_DeLearn\\projects\\MSE_FTP_DeLearn\\data\\icosimal_img_class_03\\data_uniform_224_224_sets",
+      "train_dir": "c:\\Users\\rinoa\\OneDrive - OST\\2 MSE FHO DS\\2_FS\\FTP_DeLearn\\projects\\MSE_FTP_DeLearn\\data\\icosimal_img_class_03\\data_uniform_224_224_sets\\train",
+      "val_dir": "c:\\Users\\rinoa\\OneDrive - OST\\2 MSE FHO DS\\2_FS\\FTP_DeLearn\\projects\\MSE_FTP_DeLearn\\data\\icosimal_img_class_03\\data_uniform_224_224_sets\\validate",
       "image_size": 64,
       "class_to_idx": {
         "cat": 0,
@@ -42,9 +42,9 @@
       "stats_num_workers": 8
     },
     "transforms": {
-      "use_flip": false,
-      "randaugment_num_ops": 0,
-      "randaugment_magnitude": 9
+      "use_flip": true,
+      "randaugment_num_ops": 2,
+      "randaugment_magnitude": 7
     },
     "normalization": {
       "mean": [
@@ -55,7 +55,7 @@
       "std": [
         0.24428216362942123,
         0.23862698973973118,
-        0.25215354386446914
+        0.2521535438644692
       ]
     },
     "reproducibility": {
@@ -72,7 +72,7 @@
     },
     "details": {
       "image_size": 64,
-      "dropout_rate": 0.5
+      "dropout_rate": 0.0
     }
   },
   "optimization": {
